@@ -1,119 +1,89 @@
-require IEx
-require Record
-
-defmodule Wiki do
+defmodule Deck do
   @moduledoc """
-    A very simple wiki.
-    CamelCase words are auto-linked.
-    Pages are stored in the support/wiki directory.
-
-    To run:
-
-    $ iex 21-wiki.exs
-
-    ... then point your browser to http://localhost:3000
+    Create, shuffle, deal a set of 52 cards.
   """
-
-  Record.defrecord :mod, Record.extract(:mod, from_lib: "inets/include/httpd.hrl")
-
-  @page_name "([A-Z][a-z0-9]+){2,}"
-  @valid_page_name ~r/^([A-Z][a-z0-9]+){2,}$/
-  @edit_path ~r/^([A-Z][a-z0-9]+){2,}\/edit$/
 
   @doc """
-    Start the inets server.
+    Returns a list of tuples, in sorted order.
   """
-  def run do
-    :inets.start()
-    options = [server_name: 'foo', server_root: '/tmp', document_root: '/tmp', port: 3000, modules: [__MODULE__]]
-    {:ok, _pid} = :inets.start :httpd, options
-    IO.puts "running on port 3000"
+  def new do
+    for suit <- ~w(Hearts Clubs Diamonds Spades),
+       face <- [2, 3, 4, 5, 6, 7, 8, 9, 10, "J", "Q", "K", "A"],
+       do: {suit, face}
   end
 
-  def unquote(:do)(data) do
-    [_slash | name] = mod(data, :request_uri)
+  @doc """
+    Given a list of cards (a deck), reorder cards randomly.
 
-    cond do
-      name == '' ->
-        redirect('/HomePage')
-      Regex.match?(@valid_page_name, :erlang.list_to_bitstring(name)) ->
-        case mod(data, :method) do
-          'GET'  -> render_page(name)
-          'POST' -> save_page(name, data); redirect(name)
-        end
-      Regex.match?(@edit_path, :erlang.list_to_bitstring(name)) ->
-        name = Regex.replace(~r/\/edit$/, :erlang.list_to_bitstring(name), "")
-        render_page(name, :edit)
-      true ->
-        response(404, 'bad path')
-    end
+    If no deck is given, then create a new one and shuffle that.
+  """
+  def shuffle(deck \\ new) do
+    Enum.shuffle(deck)
   end
 
-  def redirect(path, code \\ 302) do
-    body = ['redirecting you to <a href="', path, '">', path, '</a>']
-    response code, body, [location: path]
+  @doc """
+    Given a deck of cards, a list of players, and a deal function,
+    call the deal function for each card for each player. The function
+    should return the updated player.
+
+    Returns the list of players.
+  """
+
+  def deal(cards, players, deal_fn, cards_per_player \\ 52) do
+    cards_left = cards_per_player * Enum.count(players)
+    _deal(cards, players, deal_fn, cards_left)
   end
 
-  def render_page(name, action \\ :show) do
-    case {action, File.read(page_path(name))} do
-      {:edit, {:ok, body}} ->
-        response 200, edit_page_form(name, body) |> :erlang.bitstring_to_list
-      {:show, {:ok, body}} ->
-        response 200, body |> format(name) |> :erlang.bitstring_to_list
-      _ ->
-        response 404, edit_page_form(name) |> :erlang.bitstring_to_list
-    end
+  def _deal(cards, players, _, 0), do: {players, cards}
+
+  def _deal([card | rest_cards], [player | rest_players], deal_fn, cards_left) do
+    player = deal_fn.(card, player)
+    _deal(rest_cards, rest_players ++ [player], deal_fn, cards_left - 1)
   end
 
-  def format(content, name) do
-    content
-      |> sanitize
-      |> breakify
-      |> linkify
-      |> layoutify(name)
-  end
+  def _deal([], players, _, _), do: { players, [] }
 
-  def sanitize(content) do
-    content = Regex.replace(~r/&/, content, "\\&amp;")
-    content = Regex.replace(~r/</, content, "\\&lt;")
-    content = Regex.replace(~r/>/, content, "\\&gt;")
-    content
-  end
 
-  def breakify(content) do
-    Regex.replace(~r/\r?\n/, content, "<br>")
-  end
-
-  def linkify(content) do
-    {:ok, regex} = Regex.compile(@page_name)
-    Regex.replace(regex, content, "<a href='/\\0'>\\0</a>")
-  end
-
-  def layoutify(content, name) do
-    """
-      <style>nav { margin-bottom: 25px; }</style>
-      <nav><a href='/HomePage'>HomePage</a> | <a href='/#{name}/edit'>edit</a></nav>
-      <section>#{content}</section>
-    """
-  end
-
-  def page_path(name) do
-    Path.join("support/wiki", name) |> Path.expand(__DIR__)
-  end
-
-  def save_page(name, data) do
-    [{'content', content}] = :httpd.parse_query(mod(data, :entity_body))
-    File.write!(page_path(name), content)
-  end
-
-  def edit_page_form(name, content \\ "") do
-    "<form action='/#{name}' method='post'><textarea name='content' rows='25' cols='80'>#{content}</textarea><br><button>Save</button><a href='/#{name}'>cancel</a></form>"
-  end
-
-  def response(code, body, headers \\ []) do
-    headers = [code: code, content_length: Integer.to_char_list(IO.iodata_length(body))] ++ headers
-    {:proceed, [response: {:response, headers, body}]}
-  end
 end
 
-Wiki.run
+ExUnit.start
+
+defmodule DeckTest do
+  use ExUnit.Case
+
+  test "new" do
+    deck = Deck.new
+    assert Enum.at(deck, 0)  == {"Hearts", 2}
+    assert Enum.at(deck, 51) == {"Spades", "A"}
+  end
+
+  test "shuffle" do
+    :random.seed(:erlang.now)
+    deck = Deck.shuffle
+    assert Deck.shuffle != deck
+    assert length(Deck.shuffle) == 52
+  end
+
+  test "deal" do
+    players = [{"tim", []}, {"jen", []}, {"mac", []}, {"kai", []}]
+    deck = Deck.new
+    {players, deck} = Deck.deal(deck, players, fn (card, {name, cards}) -> {name, cards ++ [card]} end)
+    assert Enum.at(players, 0) == {"tim", [{"Hearts", 2}, {"Hearts", 6}, {"Hearts",  10}, {"Hearts", "A"}, {"Clubs", 5}, {"Clubs",   9}, {"Clubs",  "K"}, {"Diamonds", 4}, {"Diamonds",   8}, {"Diamonds", "Q"}, {"Spades", 3}, {"Spades",  7}, {"Spades", "J"}]}
+    assert Enum.at(players, 1) == {"jen", [{"Hearts", 3}, {"Hearts", 7}, {"Hearts", "J"}, {"Clubs",    2}, {"Clubs", 6}, {"Clubs",  10}, {"Clubs",  "A"}, {"Diamonds", 5}, {"Diamonds",   9}, {"Diamonds", "K"}, {"Spades", 4}, {"Spades",  8}, {"Spades", "Q"}]}
+    assert Enum.at(players, 2) == {"mac", [{"Hearts", 4}, {"Hearts", 8}, {"Hearts", "Q"}, {"Clubs",    3}, {"Clubs", 7}, {"Clubs", "J"}, {"Diamonds", 2}, {"Diamonds", 6}, {"Diamonds",  10}, {"Diamonds", "A"}, {"Spades", 5}, {"Spades",  9}, {"Spades", "K"}]}
+    assert Enum.at(players, 3) == {"kai", [{"Hearts", 5}, {"Hearts", 9}, {"Hearts", "K"}, {"Clubs",    4}, {"Clubs", 8}, {"Clubs", "Q"}, {"Diamonds", 3}, {"Diamonds", 7}, {"Diamonds", "J"}, {"Spades",     2}, {"Spades", 6}, {"Spades", 10}, {"Spades", "A"}]}
+    assert deck == []
+  end
+
+  test "deal 5" do
+    players = [{"tim", []}, {"jen", []}, {"mac", []}, {"kai", []}]
+    deck = Deck.new
+    {players, deck} = Deck.deal(deck, players, fn (card, {name, cards}) -> {name, cards ++ [card]} end, 5)
+    assert Enum.at(players, 0) == {"tim", [{"Hearts", 2}, {"Hearts", 6}, {"Hearts",  10}, {"Hearts", "A"}, {"Clubs", 5}]}
+    assert Enum.at(players, 1) == {"jen", [{"Hearts", 3}, {"Hearts", 7}, {"Hearts", "J"}, {"Clubs",    2}, {"Clubs", 6}]}
+    assert Enum.at(players, 2) == {"mac", [{"Hearts", 4}, {"Hearts", 8}, {"Hearts", "Q"}, {"Clubs",    3}, {"Clubs", 7}]}
+    assert Enum.at(players, 3) == {"kai", [{"Hearts", 5}, {"Hearts", 9}, {"Hearts", "K"}, {"Clubs",    4}, {"Clubs", 8}]}
+    [next | rest_of_deck] = deck
+    assert next == {"Clubs", 9}
+  end
+end
